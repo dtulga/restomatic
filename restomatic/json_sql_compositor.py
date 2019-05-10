@@ -4,20 +4,50 @@ from .validations import type_pos_int, type_non_neg_int, expect_in, expect_type,
 from .shared_exceptions import StatusMessageException
 
 
+def _process_values(values, processors, column_list):
+    if not values or not processors:
+        return values
+
+    if isinstance(values, (list, tuple)):
+        if isinstance(values[0], (list, tuple, dict)):
+            return [_process_values(v, processors, column_list) for v in values]
+
+        processors = {i: processors[c] for i, c in enumerate(column_list) if c in processors}
+        iterator = range(len(values))
+        values = list(values)
+    else:
+        iterator = values.keys()
+
+    for key in iterator:
+        if key in processors:
+            p_list = processors[key]
+            if not isinstance(p_list, (list, tuple)):
+                p_list = [p_list]
+            for p in p_list:
+                values[key] = p(values[key])
+
+    return values
+
+
 class SQLResult():
     """Result object from SQLite queries"""
 
-    def __init__(self, result_cursor):
+    def __init__(self, result_cursor, postprocessors=None, column_list=None):
         self.result_cursor = result_cursor
+        self.postprocessors = postprocessors
+        self.column_list = column_list
 
-    # This can be used as a iterator, as sqlite3's cursor
+    def _postprocess_values(self, values):
+        return _process_values(values, self.postprocessors, self.column_list)
+
+    # This can be used as a iterator, WILL run the postprocessors
     def __iter__(self):
-        return self.result_cursor
+        return self
 
     def __next__(self):
-        return next(self.result_cursor)
+        return self._postprocess_values(next(self.result_cursor))
 
-    # Convenience functions for getting certain numbers of results
+    # Convenience functions for getting certain numbers of results, WILL run the postprocessors
     def one_or_none(self):
         return self.one(True)
 
@@ -32,12 +62,12 @@ class SQLResult():
         if self.result_cursor.fetchone():
             raise SQLCompositorBadResult('Found too many results for query, where at most one was expected')
 
-        return first_row
+        return self._postprocess_values(first_row)
 
     def all(self):
-        return self.result_cursor.fetchall()
+        return self._postprocess_values(self.result_cursor.fetchall())
 
-    # Built-in functions in sqlite3
+    # Built-in functions in sqlite3, note that these DO NOT run the postprocessors, for raw data access
     def lastrowid(self):
         return self.result_cursor.lastrowid
 
@@ -46,7 +76,7 @@ class SQLResult():
 
     def fetchmany(self, size=None):
         if not size:
-            self.result_cursor.fetchmany()
+            return self.result_cursor.fetchmany()
 
         return self.result_cursor.fetchmany(size)
 
@@ -57,13 +87,17 @@ class SQLResult():
 class SQLiteDB():
     """SQLite Database interface to auto-generate queries and results"""
 
-    def __init__(self, db_path, table_mappers):
+    def __init__(self, db_path, table_mappers, preprocessors=None, postprocessors=None,
+                 enable_foreign_key_constraints=False):
         self.db_path = db_path
         if not table_mappers:
             raise SQLCompositorBadInput('Must define table_mappers to use this interface')
         self.table_mappers = table_mappers
         self.current_connection = None
         self.current_cursor = None
+        self.enable_foreign_key_constraints = enable_foreign_key_constraints
+        self.preprocessors = preprocessors
+        self.postprocessors = postprocessors
 
     def __enter__(self):
         return self
@@ -76,6 +110,16 @@ class SQLiteDB():
 
     def is_valid_table(self, table_name):
         return table_name in self.table_mappers
+
+    def get_preprocessors(self, table_name):
+        if not self.preprocessors:
+            return None
+        return self.preprocessors.get(table_name)
+
+    def get_postprocessors(self, table_name):
+        if not self.postprocessors:
+            return None
+        return self.postprocessors.get(table_name)
 
     def select_all(self, table_name):
         return SQLQuery('SELECT', table_name, self).column_list(self.table_mappers[table_name])
@@ -123,20 +167,23 @@ class SQLiteDB():
         if not self.current_cursor:
             self.current_cursor = self.connection().cursor()
 
+            if self.enable_foreign_key_constraints:
+                self.current_cursor.execute('PRAGMA foreign_keys = ON')
+
         return self.current_cursor
 
-    def execute(self, query_str, fill_values=None):
+    def execute(self, query_str, fill_values=None, postprocessors=None, column_list=None):
         cur = self.cursor()
         if not fill_values:
             cur.execute(query_str)
         else:
             cur.execute(query_str, fill_values)
-        return SQLResult(cur)
+        return SQLResult(cur, postprocessors, column_list)
 
-    def executemany(self, query_str, fill_values):
+    def executemany(self, query_str, fill_values, postprocessors=None, column_list=None):
         cur = self.cursor()
         cur.executemany(query_str, fill_values)
-        return SQLResult(cur)
+        return SQLResult(cur, postprocessors, column_list)
 
     def rollback(self):
         if not self.current_connection:
@@ -179,7 +226,25 @@ class SQLCompositorBadResult(StatusMessageException):
         StatusMessageException.__init__(self, message, status_code, additional_information)
 
 
-def generate_selector(selector, fill_values, valid_columns):
+def _process_single_column_values(values, column, processors):
+    if not values or not processors:
+        return values
+
+    if column in processors:
+        p_list = processors[column]
+        if not isinstance(p_list, (list, tuple)):
+            p_list = [p_list]
+
+        for p in p_list:
+            if isinstance(values, (list, tuple)):
+                values = [p(v) for v in values]
+            else:
+                values = p(values)
+
+    return values
+
+
+def generate_selector(selector, fill_values, valid_columns, processors=None):
     """Generates a selector from the given JSON-style selector"""
 
     if isinstance(selector, dict):
@@ -236,7 +301,7 @@ def generate_selector(selector, fill_values, valid_columns):
     if value_required:
         if len(selector) != 3 or selector[2] is None:
             raise SQLCompositorBadInput(f'Must provide a non-null value for comparison for operator {operator}')
-        value = selector[2]
+        value = _process_single_column_values(selector[2], column, processors)
 
         if value_expected_types:
             expect_type(value, value_expected_types, f'value for {operator} operator')
@@ -326,9 +391,9 @@ class SQLQuery():
         return self.db.table_mappers[self.table_name]
 
     # Validations
-    def validate_clause(self, clause, fill_values):
+    def _validate_clause(self, clause, fill_values):
         if clause.count('?') != len(fill_values):
-            raise SQLCompositorBadInput('Internal Error: Expected equal number of ? substitution elements and fill_values')
+            raise RuntimeError('Internal Error: Expected equal number of ? substitution elements and fill_values')
 
     def expect_kind(self, kinds, func_name):
         if not isinstance(kinds, (list, tuple)):
@@ -337,7 +402,7 @@ class SQLQuery():
         if self.kind not in kinds:
             raise SQLCompositorBadInput(f'Expected kind to be in {kinds} for function {func_name}')
 
-    def set_query_data_only_once(self, key, value):
+    def _set_query_data_only_once(self, key, value):
         if self.data.get(key) is not None:
             raise SQLCompositorBadInput(f'This query has {key} already set!')
 
@@ -351,13 +416,13 @@ class SQLQuery():
         if not isinstance(column_list, (list, tuple)):
             if column_list != '*':
                 raise SQLCompositorBadInput('Column list must be a list or *')
-            return self.set_query_data_only_once('column_list', self.valid_columns)  # Use the original list here to ensure no ordering mismatches
+            return self._set_query_data_only_once('column_list', self.valid_columns)  # Use the original list here to ensure no ordering mismatches
 
         for c in column_list:
             if c not in self.valid_columns:
                 raise SQLCompositorBadInput(f'Unknown column: {c}')
 
-        self.set_query_data_only_once('column_list', column_list)
+        self._set_query_data_only_once('column_list', column_list)
         return self
 
     def where(self, selector):
@@ -372,13 +437,20 @@ class SQLQuery():
         self.expect_kind(('SELECT', 'UPDATE', 'DELETE'), 'where')
 
         new_fill_values = []
-        clause = generate_selector(selector, new_fill_values, self.valid_columns)
-        self.validate_clause(clause, new_fill_values)
+        clause = generate_selector(selector, new_fill_values, self.valid_columns, self.db.get_preprocessors(self.table_name))
+        self._validate_clause(clause, new_fill_values)
 
-        self.set_query_data_only_once('where', clause)
+        self._set_query_data_only_once('where', clause)
 
         self.fill_values.extend(new_fill_values)
         return self
+
+    def get_id(self, row_id):
+        # Shortcut for getting a particular ID
+        return self.where(['id', 'eq', row_id])
+
+    def _preprocess_values(self, values):
+        return _process_values(values, self.db.get_preprocessors(self.table_name), self.data['column_list'])
 
     def set_values(self, set_values):
         self.expect_kind('UPDATE', 'set_values')
@@ -389,7 +461,7 @@ class SQLQuery():
             if c not in self.valid_columns:
                 raise SQLCompositorBadInput(f'Unknown column: {c}')
 
-        self.set_query_data_only_once('set_values', set_values)
+        self._set_query_data_only_once('set_values', self._preprocess_values(set_values))
         return self
 
     def values(self, values, autorun=True):
@@ -409,7 +481,7 @@ class SQLQuery():
         elif len(values) != len(self.data['column_list']):
             raise SQLCompositorBadInput('Must provide a list with the same length as the columns provided to insert')
 
-        self.set_query_data_only_once('values', values)
+        self._set_query_data_only_once('values', self._preprocess_values(values))
 
         if autorun:
             # Since all data is now available
@@ -434,7 +506,7 @@ class SQLQuery():
         else:
             raise SQLCompositorBadInput('Must provide a list of value dicts or one value dict for values_mapped in insert statments')
 
-        self.set_query_data_only_once('values', values)
+        self._set_query_data_only_once('values', self._preprocess_values(values))
 
         if autorun:
             # Since all data is now available
@@ -471,21 +543,21 @@ class SQLQuery():
 
             order_by_tuples.append((column, direction))
 
-        self.set_query_data_only_once('order_by', order_by_tuples)
+        self._set_query_data_only_once('order_by', order_by_tuples)
         return self
 
     def limit(self, value):
         self.expect_kind('SELECT', 'limit')
         value = cast_expect_type(value, type_pos_int, 'LIMIT')
 
-        self.set_query_data_only_once('limit', value)
+        self._set_query_data_only_once('limit', value)
         return self
 
     def offset(self, value):
         self.expect_kind('SELECT', 'offset')
         value = cast_expect_type(value, type_non_neg_int, 'OFFSET')
 
-        self.set_query_data_only_once('offset', value)
+        self._set_query_data_only_once('offset', value)
         return self
 
     def count(self):
@@ -507,9 +579,12 @@ class SQLQuery():
         limit = self.data['limit']
         offset = self.data['offset']
         values = self.data['values']
+        postprocessors = None
 
         if self.kind == 'SELECT':
             query_str = 'SELECT ' + escaped_column_list + ' FROM ' + self.table_name
+
+            postprocessors = self.db.get_postprocessors(self.table_name)
 
         elif self.kind == 'UPDATE':
             query_str = 'UPDATE ' + self.table_name + ' SET '
@@ -551,12 +626,12 @@ class SQLQuery():
         if ';' in query_str:
             raise SQLCompositorBadInput('Composite statements are not allowed')
 
-        self.validate_clause(query_str, self.fill_values)
+        self._validate_clause(query_str, self.fill_values)
 
         if self.many_query:
-            return self.db.executemany(query_str, self.fill_values)
+            return self.db.executemany(query_str, self.fill_values, postprocessors, column_list)
 
-        return self.db.execute(query_str, self.fill_values)
+        return self.db.execute(query_str, self.fill_values, postprocessors, column_list)
 
     # For executing a query directly (used for update().set_values().where().run() etc.
     # Insert into can autorun, and all, one, one_or_none forms are used for select

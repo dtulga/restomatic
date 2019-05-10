@@ -1,0 +1,72 @@
+version: 2.1
+workflows:
+  build_and_test:
+    jobs:
+      - test-python-install:
+          version: "3.6"
+          requires:
+            - build
+      - test-python-install:
+          version: "3.7"
+          requires:
+            - build
+jobs:
+  build:
+    docker:
+      - image: circleci/python:3.6
+    steps:
+      - checkout
+      - restore_cache:
+          key: v1-deps-cache-{{ checksum "restomatic/__init__.py" }}-{{ checksum "Makefile" }}
+      - run:
+          name: Install test dependencies
+          command: |
+            python3 -m venv venv
+            . venv/bin/activate
+            make requirements
+      - save_cache:
+          key: v1-deps-cache-{{ checksum "restomatic/__init__.py" }}-{{ checksum "Makefile" }}
+          paths:
+            - "venv"
+      - run:
+          name: Run tests and coverage
+          command: |
+            . venv/bin/activate
+            make coverage
+            codecov
+      - store_artifacts:
+          path: htmlcov/
+  test-python-install:
+    parameters:
+      version:
+        type: string
+        default: latest
+    docker:
+      - image: circleci/python:<< parameters.version >>
+    steps:
+      - checkout
+      - restore_cache:
+          key: v1-deps-cache-{{ checksum "restomatic/__init__.py" }}-{{ checksum "Makefile" }}
+      - run:
+          name: Install test dependencies
+          command: |
+            python3 -m venv venv
+            . venv/bin/activate
+            make requirements
+      - save_cache:
+          key: v1-deps-cache-{{ checksum "restomatic/__init__.py" }}-{{ checksum "Makefile" }}
+          paths:
+            - "venv"
+      - run:
+          name: Run tests and coverage
+          command: |
+            . venv/bin/activate
+            make coverage
+            codecov
+      - store_artifacts:
+          path: htmlcov/
+      - run:
+          name: Test local install
+          command: |
+            python --version
+            sudo pip3 install restomatic

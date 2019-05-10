@@ -1,6 +1,7 @@
 import html
 import json
 import urllib.parse
+from functools import partial
 
 from .validations import expect_in, expect_type, expect_len, expect_len_range, expect_only_one_of, set_dict_data_only_once
 from .shared_exceptions import StatusMessageException
@@ -98,12 +99,12 @@ def add_content_type_header(headers, format):
             return headers
 
     if format == 'html':
-        headers.append(('Content-Type', 'text/html'))
+        headers.append(('Content-Type', 'text/html; charset=utf-8'))
     elif format == 'json':
-        headers.append(('Content-Type', 'application/json'))
+        headers.append(('Content-Type', 'application/json; charset=utf-8'))
     else:
         # raw / plain
-        headers.append(('Content-Type', 'text/plain'))
+        headers.append(('Content-Type', 'text/plain; charset=utf-8'))
 
     return headers
 
@@ -153,6 +154,15 @@ def parse_request_body(environ, in_format):
     return body
 
 
+def serve_static_file(filename, request):
+    with open(filename) as f:
+        return f.read()
+
+
+def serve_static_data(data, request):
+    return data
+
+
 class EndpointRouter():
     """WSGI router to send requests to the appropriate registered endpoint"""
     def __init__(self, default_in_format='plain', default_out_format='plain', default_html_error=default_render_html_error):
@@ -172,9 +182,18 @@ class EndpointRouter():
         self.server_default_out_format = default_out_format
         self.server_render_html_error = default_html_error
 
-    def register_endpoint(self, func, in_format=None, out_format=None, exact=None, prefix=None, method=None, disallow_other_methods=None):
-        if not func:
+    def register_endpoint(self, func=None, static_file=None, static_data=None,
+                          in_format=None, out_format=None, exact=None, prefix=None, method=None, disallow_other_methods=None):
+        if not func and not static_file and not static_data:
             raise EndpointRouterBadDefinition('Must define func for register_endpoint')
+
+        expect_only_one_of([func, static_file, static_data], ('func', 'static_file', 'static_data'))
+
+        if static_file:
+            func = partial(serve_static_file, static_file)
+
+        if static_data:
+            func = partial(serve_static_data, static_data)
 
         method = method.upper().strip()
         expect_in(method, ('GET', 'POST', 'PUT', 'PATCH', 'DELETE'), 'method')
@@ -220,11 +239,11 @@ class EndpointRouter():
     def generate_error_response(self, format, error_title, error_message=None):
         # Always escape HTML to prevent XSS attacks, as all three types can be rendered under some circumstances
         if format == 'html':
-            return self.server_render_html_error(error_title, error_message), [('Content-Type', 'text/html')]
+            return self.server_render_html_error(error_title, error_message), [('Content-Type', 'text/html; charset=utf-8')]
         if format == 'json':
-            return json.dumps({'message': html.escape(error_message or error_title)}), [('Content-Type', 'application/json')]
+            return json.dumps({'message': html.escape(error_message or error_title)}), [('Content-Type', 'application/json; charset=utf-8')]
         # raw / plain
-        return html.escape(error_message or error_title), [('Content-Type', 'text/plain')]
+        return html.escape(error_message or error_title), [('Content-Type', 'text/plain; charset=utf-8')]
 
     def find_endpoint(self, uri_path, method):
         allowed = ['GET']

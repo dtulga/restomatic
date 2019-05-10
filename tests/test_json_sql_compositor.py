@@ -85,10 +85,82 @@ def test_basic_queries():
 
     assert db.select_all('test').count().scalar() == 3
 
+    db.delete('test').run()
+
+    db.rollback()
+
+    with pytest.raises(RuntimeError):
+        db.commit()
+
+    assert db.select_all('test').get_id(1).one() == (1, 'test 1', 2.0)
+
     db.close()
 
     # Should be safe to call multiple times
     db.close()
+
+
+def description_validator(description):
+    if description.startswith('bogus'):
+        raise RuntimeError('Invalid description!')
+    return description
+
+
+def value_preprocessor(value):
+    return value - 1
+
+
+def value_postprocessor(value):
+    return value + 1
+
+
+def test_pre_and_post_processors():
+    db = SQLiteDB(':memory:', table_mappers, preprocessors={
+        'test': {
+            'description': description_validator,
+            'value': value_preprocessor,
+        },
+    }, postprocessors={
+        'test': {
+            'value': value_postprocessor,
+        }
+    })
+
+    db.execute('CREATE TABLE test (id INTEGER PRIMARY KEY, description TEXT, value INTEGER)')
+
+    result = db.insert_mapped('test', {'description': 'test 1', 'value': 1})
+
+    db.commit()
+
+    with pytest.raises(RuntimeError):
+        db.insert_mapped('test', {'description': 'bogus', 'value': 2})
+
+    # Returns as list, as it needs to be mutable for the postprocessors to run
+    assert db.select_all('test').where(['id', 'eq', 1]).one() == [1, 'test 1', 1]
+
+    # Bypassing the postprocessors
+    assert db.select_all('test').where(['id', 'eq', 1]).result().fetchone() == (1, 'test 1', 0)
+
+    db.insert('test', ('description', 'value')).values([['test 2', 2], ['test 3', -3]], autorun=False).run()
+
+    # Bypassing the postprocessors
+    assert db.select_all('test').where(['id', 'eq', 2]).result().fetchall() == [(2, 'test 2', 1)]
+
+    result = db.select_all('test').where(['id', 'eq', 3]).result()
+    for r in result:
+        assert r == [3, 'test 3', -3]
+
+    db.update_mapped('test', {'value': 2}).where(('id', 'eq', 1)).run()
+
+    assert db.select_all('test').where(['id', 'eq', 1]).one() == [1, 'test 1', 2]
+
+    # Bypassing the postprocessors
+    assert db.select_all('test').where(['id', 'eq', 1]).result().fetchmany() == [(1, 'test 1', 1)]
+    assert db.select_all('test').where(['id', 'eq', 1]).result().fetchmany(1) == [(1, 'test 1', 1)]
+
+    assert db.select_all('test').where(['value', 'eq', -3]).one() == [3, 'test 3', -3]
+
+    assert db.select_all('test').where(['value', 'in', [1, 2]]).all() == [[1, 'test 1', 2], [2, 'test 2', 2]]
 
 
 def test_bad_input_handling():

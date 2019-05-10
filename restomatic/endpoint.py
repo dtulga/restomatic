@@ -250,7 +250,7 @@ def register_restomatic_endpoint(endpoint_router, db, table_name, allowed_method
             #   body: {...}
             # or POST many: /table
             #   body: [{...}, {...}]
-            # or POST-based search: /table/search (returns 200 if found, 404 if no matches)
+            # or POST-based search: /table/search (returns 200 with a list of results if found, otherwise None)
             #   body: {'where': [...search criteria...]}
             endpoint_router.register_endpoint(in_format='json', out_format='json', prefix=f'/{table_name}', method=method,
                                               func=generate_rom_post(db, table_name, **parameters))

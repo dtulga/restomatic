@@ -220,6 +220,30 @@ If the content-type header is provided, it can be used to override the default b
 
 See the test file for a full treatment on all possible usages and return values/formats.
 
+### Advanced Usage (Pre-/post-processing, etc.)
+
+In addition, you can add pre- and post- processors, to perform validation of data inputs, and also for custom type handling.
+
+These can be added at database connection time, for example:
+
+```
+db = SQLiteDB('file.db', table_mappers, preprocessors={
+    'table_name': {
+        'description': description_validator,
+        'value': value_preprocessor,
+    },
+}, postprocessors={
+    'table_name': {
+        'value': value_postprocessor,
+    }
+})
+```
+
+Preprocessors can raise exceptions to indicate invalid data, which will then abort the current SQL query or request.
+
+Postprocessors can format the data in other ways (different than the internal data format), and along with matching
+preprocessors can be used to effectively create custom data types.
+
 ## Install
 
 Requires Python 3.6+ with no other external dependencies.

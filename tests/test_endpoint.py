@@ -15,7 +15,7 @@ table_mappers = {
 def assert_json_response(wsgi, response, status, expected_json):
     assert json.loads(response) == expected_json
     assert wsgi.status == status
-    assert wsgi.headers == [('Content-Type', 'application/json')]
+    assert wsgi.headers == [('Content-Type', 'application/json; charset=utf-8')]
 
 
 def test_restomatic_endpoint_operations():

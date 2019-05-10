@@ -23,6 +23,10 @@ def endpt_extra_header(request):
     return 'Totally a normal page', 200, {'X-Secret-Header': 'Super Secret'}
 
 
+def endpt_override_text(request):
+    return 'Actually just plain text', 200, [('Content-Type', 'text/plain; charset=utf-8')]
+
+
 def endpt_echo(request):
     return {'You sent this uri': request['uri']['path']}
 
@@ -56,38 +60,41 @@ def test_endpoint_router_main():
     router.register_endpoint(endpt_echo_body_plain, exact='/echo_body_plain', method='PATCH', in_format='plain', out_format='plain')
     router.register_endpoint(endpt_echo_body_html, exact='/echo_body_html', method='PATCH', in_format='form', out_format='html')
     router.register_endpoint(endpt_exception, exact='/whoops', method='GET', out_format='html')
+    router.register_endpoint(static_data='Hi!', exact='/hi', method='GET', out_format='plain')
+    router.register_endpoint(static_file='LICENSE', exact='/license', method='GET', out_format='plain')
+    router.register_endpoint(endpt_override_text, prefix='/override', method='GET', out_format='html')
 
     wsgi = WSGIDebugger(router.application)
 
     response = wsgi.test_endpoint('GET', '/')
     assert response == 'Hello World!'
     assert wsgi.status == '200 OK'
-    assert wsgi.headers == [('Content-Type', 'text/plain')]
+    assert wsgi.headers == [('Content-Type', 'text/plain; charset=utf-8')]
 
     response = wsgi.test_endpoint('GET', '/not_found')
     assert response == '404 Not Found'
     assert wsgi.status == '404 Not Found'
-    assert wsgi.headers == [('Content-Type', 'text/plain')]
+    assert wsgi.headers == [('Content-Type', 'text/plain; charset=utf-8')]
 
     response = wsgi.test_endpoint('GET', '/denied')
     assert response == "I can't let you do that, Dave."
     assert wsgi.status == '401 Unauthorized'
-    assert wsgi.headers == [('Content-Type', 'text/plain')]
+    assert wsgi.headers == [('Content-Type', 'text/plain; charset=utf-8')]
 
     response = wsgi.test_endpoint('POST', '/denied')
     assert response == '405 Method Not Allowed'
     assert wsgi.status == '405 Method Not Allowed'
-    assert wsgi.headers == [('Content-Type', 'text/plain'), ('Allow', 'GET')]
+    assert wsgi.headers == [('Content-Type', 'text/plain; charset=utf-8'), ('Allow', 'GET')]
 
     response = wsgi.test_endpoint('PUT', '/extra_header')
     assert response == "Totally a normal page"
     assert wsgi.status == '200 OK'
-    assert wsgi.headers == [('X-Secret-Header', 'Super Secret'), ('Content-Type', 'text/plain')]
+    assert wsgi.headers == [('X-Secret-Header', 'Super Secret'), ('Content-Type', 'text/plain; charset=utf-8')]
 
     response = wsgi.test_endpoint('GET', '/echo/hi')
     assert json.loads(response) == {'You sent this uri': '/echo/hi'}
     assert wsgi.status == '200 OK'
-    assert wsgi.headers == [('Content-Type', 'application/json')]
+    assert wsgi.headers == [('Content-Type', 'application/json; charset=utf-8')]
 
     response = wsgi.test_endpoint('GET', '/whoops')
     assert response == """<!DOCTYPE html>
@@ -101,22 +108,22 @@ ValueError: invalid literal for int() with base 10: &#x27;whoops&#x27;
 </html>
 """
     assert wsgi.status == '500 Internal Server Error'
-    assert wsgi.headers == [('Content-Type', 'text/html')]
+    assert wsgi.headers == [('Content-Type', 'text/html; charset=utf-8')]
 
     response = wsgi.test_endpoint('PATCH', '/echo_body', json.dumps({'testing': 'yep'}))
     assert json.loads(response) == {'You sent this request body': {'testing': 'yep'}}
     assert wsgi.status == '200 OK'
-    assert wsgi.headers == [('Content-Type', 'application/json')]
+    assert wsgi.headers == [('Content-Type', 'application/json; charset=utf-8')]
 
     response = wsgi.test_endpoint('PATCH', '/echo_body', '{"Probably not valid JSON": ')
     assert json.loads(response) == {'message': 'Failed to parse JSON input: Expecting value: line 1 column 29 (char 28)'}
     assert wsgi.status == '400 Bad Request'
-    assert wsgi.headers == [('Content-Type', 'application/json')]
+    assert wsgi.headers == [('Content-Type', 'application/json; charset=utf-8')]
 
     response = wsgi.test_endpoint('PATCH', '/echo_body_plain', 'Additional & Information')
     assert response == 'You sent this request body: Additional &amp; Information'
     assert wsgi.status == '200 OK'
-    assert wsgi.headers == [('Content-Type', 'text/plain')]
+    assert wsgi.headers == [('Content-Type', 'text/plain; charset=utf-8')]
 
     response = wsgi.test_endpoint('PATCH', '/echo_body_html', 'source=Neither+Here+Nor+There&data=100%25%21')
     assert response == ('<html><head></head><body>'
@@ -124,7 +131,37 @@ ValueError: invalid literal for int() with base 10: &#x27;whoops&#x27;
                         '{&#x27;source&#x27;: [&#x27;Neither Here Nor There&#x27;], &#x27;data&#x27;: [&#x27;100%!&#x27;]}'
                         '</body></html>')
     assert wsgi.status == '200 OK'
-    assert wsgi.headers == [('Content-Type', 'text/html')]
+    assert wsgi.headers == [('Content-Type', 'text/html; charset=utf-8')]
+
+    response = wsgi.test_endpoint('GET', '/hi')
+    assert response == 'Hi!'
+    assert wsgi.status == '200 OK'
+    assert wsgi.headers == [('Content-Type', 'text/plain; charset=utf-8')]
+
+    response = wsgi.test_endpoint('GET', '/license')
+    with open('LICENSE') as f:
+        assert response == f.read()
+    assert wsgi.status == '200 OK'
+    assert wsgi.headers == [('Content-Type', 'text/plain; charset=utf-8')]
+
+    response = wsgi.test_endpoint('GET', '/override')
+    assert response == 'Actually just plain text'
+    assert wsgi.status == '200 OK'
+    assert wsgi.headers == [('Content-Type', 'text/plain; charset=utf-8')]
+
+    response = wsgi.test_endpoint('PATCH', '/override')
+    assert response == """<!DOCTYPE html>
+<html>
+<head>
+<title>405 Method Not Allowed</title>
+</head>
+<body>
+405 Method Not Allowed
+</body>
+</html>
+"""
+    assert wsgi.status == '405 Method Not Allowed'
+    assert wsgi.headers == [('Content-Type', 'text/html; charset=utf-8'), ('Allow', 'GET')]
 
 
 def test_bad_definitions():
