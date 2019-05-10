@@ -73,4 +73,4 @@ jobs:
           name: Test local install
           command: |
             python --version
-            sudo pip3 install restomatic
+            python3 setup.py install
