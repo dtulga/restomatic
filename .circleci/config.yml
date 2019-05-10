@@ -2,6 +2,10 @@ version: 2.1
 workflows:
   build_and_test:
     jobs:
+      - build:
+          filters:
+            branches:
+              only: master
       - test-python-install:
           version: "3.6"
           requires:
