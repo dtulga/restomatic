@@ -1,6 +1,9 @@
 # Rest-o-matic
 Automatic JSON-based API generator, including a SQL Query Compositor and WSGI Endpoint Router
 
+[![CircleCI](https://circleci.com/gh/dtulga/restomatic/tree/master.svg?style=svg)](https://circleci.com/gh/dtulga/restomatic/tree/master)
+[![codecov](https://codecov.io/gh/dtulga/restomatic/branch/master/graph/badge.svg)](https://codecov.io/gh/dtulga/restomatic)
+
 ## Warning: This software is in alpha, and API or function signatures may change before full release.
 
 ## Usage
