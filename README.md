@@ -247,6 +247,16 @@ Preprocessors can raise exceptions to indicate invalid data, which will then abo
 Postprocessors can format the data in other ways (different than the internal data format), and along with matching
 preprocessors can be used to effectively create custom data types.
 
+### Foreign Key Support
+
+Sqlite by default does not enforce foreign keys, to enable support, simply set the flag at database connection time:
+
+```
+db = SQLiteDB('example.db', table_mappers, enable_foreign_key_constraints=True)
+```
+
+This will then throw a sqlite3.IntegrityError if a foreign key constraint is not satisfied.
+
 ## Install
 
 Requires Python 3.6+ with no other external dependencies.

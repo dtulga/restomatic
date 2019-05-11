@@ -1,4 +1,5 @@
 import pytest
+from sqlite3 import IntegrityError
 
 from restomatic.json_sql_compositor import SQLiteDB, SQLQuery, SQLCompositorBadInput, SQLCompositorBadResult
 
@@ -128,7 +129,7 @@ def test_pre_and_post_processors():
 
     db.execute('CREATE TABLE test (id INTEGER PRIMARY KEY, description TEXT, value INTEGER)')
 
-    result = db.insert_mapped('test', {'description': 'test 1', 'value': 1})
+    db.insert_mapped('test', {'description': 'test 1', 'value': 1})
 
     db.commit()
 
@@ -161,6 +162,31 @@ def test_pre_and_post_processors():
     assert db.select_all('test').where(['value', 'eq', -3]).one() == [3, 'test 3', -3]
 
     assert db.select_all('test').where(['value', 'in', [1, 2]]).all() == [[1, 'test 1', 2], [2, 'test 2', 2]]
+
+
+def test_foreign_keys():
+    db = SQLiteDB(':memory:', table_mappers, enable_foreign_key_constraints=True)
+
+    # Should be safe to call before any transaction has started
+    db.rollback()
+
+    db.execute('CREATE TABLE test (id INTEGER PRIMARY KEY, description TEXT, value INTEGER, '
+               'CONSTRAINT fk_self FOREIGN KEY (value) REFERENCES test(id) ON DELETE CASCADE)')
+
+    db.insert_mapped('test', {'description': 'test 1'})
+
+    assert db.select_all('test').where(['id', 'eq', 1]).one() == (1, 'test 1', None)
+
+    with pytest.raises(IntegrityError):
+        db.insert_mapped('test', {'description': 'test 2', 'value': 5})
+
+    db.insert_mapped('test', {'description': 'test 2', 'value': 1})
+    db.insert_mapped('test', {'description': 'test 3', 'value': None})
+
+    # Test cascade delete
+    db.delete('test').where(('id', 'eq', 1)).run()
+
+    assert db.select_all('test').where(['id', 'isnotnull']).one() == (3, 'test 3', None)
 
 
 def test_bad_input_handling():
