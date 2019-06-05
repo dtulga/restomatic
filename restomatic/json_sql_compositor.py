@@ -4,13 +4,13 @@ from .validations import type_pos_int, type_non_neg_int, expect_in, expect_type,
 from .shared_exceptions import StatusMessageException
 
 
-def _process_values(values, processors, column_list):
+def _process_values(values, processors, column_list, context):
     if not values or not processors:
         return values
 
     if isinstance(values, (list, tuple)):
         if isinstance(values[0], (list, tuple, dict)):
-            return [_process_values(v, processors, column_list) for v in values]
+            return [_process_values(v, processors, column_list, context) for v in values]
 
         processors = {i: processors[c] for i, c in enumerate(column_list) if c in processors}
         iterator = range(len(values))
@@ -24,7 +24,7 @@ def _process_values(values, processors, column_list):
             if not isinstance(p_list, (list, tuple)):
                 p_list = [p_list]
             for p in p_list:
-                values[key] = p(values[key])
+                values[key] = p(values[key], **context)
 
     return values
 
@@ -38,7 +38,7 @@ class SQLResult():
         self.column_list = column_list
 
     def _postprocess_values(self, values):
-        return _process_values(values, self.postprocessors, self.column_list)
+        return _process_values(values, self.postprocessors, self.column_list, context={})
 
     # This can be used as a iterator, WILL run the postprocessors
     def __iter__(self):
@@ -226,7 +226,7 @@ class SQLCompositorBadResult(StatusMessageException):
         StatusMessageException.__init__(self, message, status_code, additional_information)
 
 
-def _process_single_column_values(values, column, processors):
+def _process_single_column_values(values, column, processors, context):
     if not values or not processors:
         return values
 
@@ -237,14 +237,14 @@ def _process_single_column_values(values, column, processors):
 
         for p in p_list:
             if isinstance(values, (list, tuple)):
-                values = [p(v) for v in values]
+                values = [p(v, **context) for v in values]
             else:
-                values = p(values)
+                values = p(values, **context)
 
     return values
 
 
-def generate_selector(selector, fill_values, valid_columns, processors=None):
+def generate_selector(selector, fill_values, valid_columns, processors, context):
     """Generates a selector from the given JSON-style selector"""
 
     if isinstance(selector, dict):
@@ -254,7 +254,7 @@ def generate_selector(selector, fill_values, valid_columns, processors=None):
             kind = kind.upper()
             expect_type(s_list, (list, tuple), 'selector')
             expect_in(kind, ('AND', 'OR'), 'logical operator')
-            return f' {kind} '.join([f'({generate_selector(s, fill_values, valid_columns)})' for s in s_list])
+            return f' {kind} '.join([f'({generate_selector(s, fill_values, valid_columns, processors, context)})' for s in s_list])
 
     expect_type(selector, (list, tuple), 'selector')
     expect_len_range(selector, 2, 3, 'selector')
@@ -301,7 +301,7 @@ def generate_selector(selector, fill_values, valid_columns, processors=None):
     if value_required:
         if len(selector) != 3 or selector[2] is None:
             raise SQLCompositorBadInput(f'Must provide a non-null value for comparison for operator {operator}')
-        value = _process_single_column_values(selector[2], column, processors)
+        value = _process_single_column_values(selector[2], column, processors, context)
 
         if value_expected_types:
             expect_type(value, value_expected_types, f'value for {operator} operator')
@@ -437,7 +437,8 @@ class SQLQuery():
         self.expect_kind(('SELECT', 'UPDATE', 'DELETE'), 'where')
 
         new_fill_values = []
-        clause = generate_selector(selector, new_fill_values, self.valid_columns, self.db.get_preprocessors(self.table_name))
+        clause = generate_selector(selector, new_fill_values, self.valid_columns, self.db.get_preprocessors(self.table_name),
+                                   {'db': self.db, 'mode': 'WHERE'})
         self._validate_clause(clause, new_fill_values)
 
         self._set_query_data_only_once('where', clause)
@@ -449,8 +450,9 @@ class SQLQuery():
         # Shortcut for getting a particular ID
         return self.where(['id', 'eq', row_id])
 
-    def _preprocess_values(self, values):
-        return _process_values(values, self.db.get_preprocessors(self.table_name), self.data['column_list'])
+    def _preprocess_values(self, values, mode='INSERT INTO'):
+        return _process_values(values, self.db.get_preprocessors(self.table_name), self.data['column_list'],
+                               {'db': self.db, 'mode': mode})
 
     def set_values(self, set_values):
         self.expect_kind('UPDATE', 'set_values')
@@ -461,7 +463,7 @@ class SQLQuery():
             if c not in self.valid_columns:
                 raise SQLCompositorBadInput(f'Unknown column: {c}')
 
-        self._set_query_data_only_once('set_values', self._preprocess_values(set_values))
+        self._set_query_data_only_once('set_values', self._preprocess_values(set_values, mode='UPDATE'))
         return self
 
     def values(self, values, autorun=True):

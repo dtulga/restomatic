@@ -247,6 +247,24 @@ Preprocessors can raise exceptions to indicate invalid data, which will then abo
 Postprocessors can format the data in other ways (different than the internal data format), and along with matching
 preprocessors can be used to effectively create custom data types.
 
+The function signature of both pre- and post-processors should be:
+
+```
+def value_processor(value, **context):
+    ... code here ...
+    return value
+```
+
+Note that the function name and first variable name (for the value) are both not important and can be named whatever
+is best for your code. The context variable is to capture current and future context information about where this
+pre or postprocessor is being run from. Currently, the context is set only for preprocessors, and has the 'db' set to
+the db instance it is running from, and the 'mode' variable set to the current mode, either 'INSERT INTO', 'UPDATE',
+or 'WHERE' (for searching/getting).
+
+Note that both processor types should return the new processed value to either be inserted into the database (pre-)
+or returned to the user (post-), which of course can be identical to the inputted value in the case of validators
+or conditional processors.
+
 ### Foreign Key Support
 
 Sqlite by default does not enforce foreign keys, to enable support, simply set the flag at database connection time:
@@ -278,7 +296,6 @@ In addition, to run the unit tests, pytest is required, and pytest-cov recommend
 * Greater database support, including PostgreSQL / MySQL
 * Support for more types, such as enums and booleans
 * Automatic table creation, plus check constraints (for ranges/positive/etc.)
-* Support for pre- and post- processing data for better validation and structure
 * Ability to use decorators, authorization, and logging for better security and customization
 * Support for JOINs and possibly foreign key relationship loading
 * Support for Flask (option to be used instead of the provided WSGI router)

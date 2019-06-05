@@ -87,7 +87,7 @@ def run_endpoint(func, request, out_format):
     if out_format == 'json':
         response_data = json.dumps(response_data)
     else:
-        # raw, plain, html
+        # raw, plain, html, js
         expect_type(response_data, str, 'response data')
 
     return response_data, status_code, headers
@@ -100,11 +100,23 @@ def add_content_type_header(headers, format):
 
     if format == 'html':
         headers.append(('Content-Type', 'text/html; charset=utf-8'))
+    elif format == 'js':
+        headers.append(('Content-Type', 'application/javascript; charset=utf-8'))
     elif format == 'json':
         headers.append(('Content-Type', 'application/json; charset=utf-8'))
     else:
         # raw / plain
         headers.append(('Content-Type', 'text/plain; charset=utf-8'))
+
+    return headers
+
+
+def add_content_length_header(headers, length):
+    for key, value in headers:
+        if key == 'Content-Length':
+            return headers
+
+    headers.append(('Content-Length', str(length)))
 
     return headers
 
@@ -182,6 +194,11 @@ class EndpointRouter():
         self.server_default_out_format = default_out_format
         self.server_render_html_error = default_html_error
 
+    def _register_endpoint_internal(self, type_str, type_dict, location, method, endpoint_def):
+        expect_type(location, str, f'{type_str} uri')
+        set_dict_data_only_once(type_dict, [location, method], endpoint_def,
+                                f'{type_str} uri definition for {location} for method {method}')
+
     def register_endpoint(self, func=None, static_file=None, static_data=None,
                           in_format=None, out_format=None, exact=None, prefix=None, method=None, disallow_other_methods=None):
         if not func and not static_file and not static_data:
@@ -209,7 +226,7 @@ class EndpointRouter():
         out_format = out_format.lower().strip()
 
         expect_in(in_format, ('raw', 'plain', 'form', 'json'), 'in_format')
-        expect_in(out_format, ('raw', 'plain', 'html', 'json'), 'out_format')
+        expect_in(out_format, ('raw', 'plain', 'html', 'js', 'json'), 'out_format')
 
         endpoint_def = {
             'in_format': in_format,
@@ -218,27 +235,34 @@ class EndpointRouter():
         }
 
         if exact:
-            expect_type(exact, str, 'exact uri')
-            set_dict_data_only_once(self._endpoints_exact, [exact, method], endpoint_def,
-                                    f'exact uri definition for {exact} for method {method}')
+            location = exact
+            type_str = 'exact'
+            type_dict = self._endpoints_exact
 
         if prefix:
-            expect_type(prefix, str, 'prefix uri')
-            set_dict_data_only_once(self._endpoints_prefix, [prefix, method], endpoint_def,
-                                    f'prefix uri definition for {exact} for method {method}')
+            location = prefix
+            type_str = 'prefix'
+            type_dict = self._endpoints_prefix
+
+        if not isinstance(location, (list, tuple)):
+            location = [location]
+
+        for loc in location:
+            self._register_endpoint_internal(type_str, type_dict, loc, method, endpoint_def)
 
         if disallow_other_methods:
             if not exact:
                 raise EndpointRouterBadDefinition('Can only use disallow_other_methods with exact match endpoints, '
                                                   'as prefix matches are auto-disallowed')
             # The last format specified is the format returned for 405s (if inconsistent for the same endpoint - not recommended!)
-            self._endpoints_exact_disallow[exact] = out_format
+            for loc in location:
+                self._endpoints_exact_disallow[loc] = out_format
 
     # TODO: Convenience register_class function (auto-detects get/post/etc. class methods)
 
     def generate_error_response(self, format, error_title, error_message=None):
-        # Always escape HTML to prevent XSS attacks, as all three types can be rendered under some circumstances
-        if format == 'html':
+        # Always escape HTML to prevent XSS attacks, as all types can be rendered under some circumstances
+        if format in ('html', 'js'):
             return self.server_render_html_error(error_title, error_message), [('Content-Type', 'text/html; charset=utf-8')]
         if format == 'json':
             return json.dumps({'message': html.escape(error_message or error_title)}), [('Content-Type', 'application/json; charset=utf-8')]
@@ -354,5 +378,8 @@ class EndpointRouter():
         expect_type(response_data, str, 'internal response_data')
 
         headers.extend(additional_headers)
+        encoded_response = response_data.encode('utf-8')
+        add_content_length_header(headers, len(encoded_response))
+
         start_response(status, headers)
-        return [response_data.encode('utf-8')]
+        return [encoded_response]

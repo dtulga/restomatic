@@ -101,17 +101,23 @@ def test_basic_queries():
     db.close()
 
 
-def description_validator(description):
+def description_validator(description, **context):
+    assert isinstance(context['db'], SQLiteDB)
+    assert context['mode'] in ('WHERE', 'UPDATE', 'INSERT INTO')
+
     if description.startswith('bogus'):
         raise RuntimeError('Invalid description!')
     return description
 
 
-def value_preprocessor(value):
+def value_preprocessor(value, **context):
+    assert isinstance(context['db'], SQLiteDB)
+    assert context['mode'] in ('WHERE', 'UPDATE', 'INSERT INTO')
+
     return value - 1
 
 
-def value_postprocessor(value):
+def value_postprocessor(value, **context):
     return value + 1
 
 
